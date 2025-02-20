@@ -4,8 +4,10 @@ import re
 import subprocess
 
 BASE_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-REPO_NAME = "EmailUsersPackageBuilder"
-REPO_PATH = os.path.join(BASE_PATH, REPO_NAME)
+TEMPLIFY_REPO_NAME = "templify"
+TEMPLIFY_REPO_PATH = os.path.join(BASE_PATH, TEMPLIFY_REPO_NAME)
+EMAIL_USERS_REPO_NAME = "EmailUsersPackageBuilder"
+TEMPLATES_REPO_PATH = os.path.join(BASE_PATH, EMAIL_USERS_REPO_NAME)
 
 
 def main():
@@ -26,7 +28,9 @@ def main():
 
     # Get template filename
     template_filename = get_template_filename(template_filename)
-    template_filepath = os.path.join(REPO_PATH, "templates", template_filename)
+    template_filepath = os.path.join(
+        TEMPLATES_REPO_PATH, "templates", template_filename
+    )
 
     # Get the updated HTML content
     updated_html_set_statement = get_updated_html_set_statement()
@@ -44,6 +48,10 @@ def main():
     # Create PR
     print(f"Creating PR to base branch: {base_branch}")
     input("Continue (y/n): ").lower() == "y" and create_pr(base_branch)
+
+    # Clean up
+    print("Cleaning up...")
+    subprocess.run(["rm", "-f", "updated_template_set.sql"], cwd=TEMPLIFY_REPO_PATH)
 
 
 def parse_arguments():
@@ -67,9 +75,10 @@ def parse_arguments():
 
 def switch_branch_if_needed(base_branch, ticket_branch):
     """Switch to a different git branch if needed."""
-    subprocess.run(["git", "fetch"], cwd=REPO_PATH)
+    subprocess.run(["git", "fetch"], cwd=TEMPLATES_REPO_PATH)
 
     current_branch = get_current_git_branch()
+    ticket_branch = ticket_branch or current_branch
     if current_branch != ticket_branch:
         print(f"Current branch: {current_branch}. Switching to {ticket_branch}")
         checkout_branch(base_branch, ticket_branch)
@@ -79,7 +88,7 @@ def get_current_git_branch():
     """Get the current git branch."""
     return (
         subprocess.check_output(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=REPO_PATH
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=TEMPLATES_REPO_PATH
         )
         .decode("utf-8")
         .strip()
@@ -88,8 +97,10 @@ def get_current_git_branch():
 
 def checkout_branch(base_branch, ticket_branch):
     try:
-        subprocess.run(["git", "checkout", ticket_branch], cwd=REPO_PATH)
-        subprocess.run(["git", "pull", "origin", ticket_branch], cwd=REPO_PATH)
+        subprocess.run(["git", "checkout", ticket_branch], cwd=TEMPLATES_REPO_PATH)
+        subprocess.run(
+            ["git", "pull", "origin", ticket_branch], cwd=TEMPLATES_REPO_PATH
+        )
     except subprocess.CalledProcessError:
         print(f"The branch '{ticket_branch}' does not exist.")
         branch_out = base_branch or get_current_git_branch()
@@ -97,11 +108,15 @@ def checkout_branch(base_branch, ticket_branch):
             input(f"Confirm branching out from {branch_out}? (y/n): ").lower() == "y"
         )
         if create_new_branch:
-            subprocess.run(["git", "checkout", branch_out], cwd=REPO_PATH)
-            subprocess.run(["git", "pull", "origin", branch_out], cwd=REPO_PATH)
-            subprocess.run(["git", "checkout", "-b", ticket_branch], cwd=REPO_PATH)
+            subprocess.run(["git", "checkout", branch_out], cwd=TEMPLATES_REPO_PATH)
             subprocess.run(
-                ["git", "push", "-u", "origin", ticket_branch], cwd=REPO_PATH
+                ["git", "pull", "origin", branch_out], cwd=TEMPLATES_REPO_PATH
+            )
+            subprocess.run(
+                ["git", "checkout", "-b", ticket_branch], cwd=TEMPLATES_REPO_PATH
+            )
+            subprocess.run(
+                ["git", "push", "-u", "origin", ticket_branch], cwd=TEMPLATES_REPO_PATH
             )
         else:
             print(f"Branch change aborted. proceeding with {get_current_git_branch()}")
@@ -110,7 +125,7 @@ def checkout_branch(base_branch, ticket_branch):
 def get_template_filename(template_filename):
     if not template_filename:
         template_filenames = list_templates_in_directory(
-            os.path.join(REPO_PATH, "templates")
+            os.path.join(TEMPLATES_REPO_PATH, "templates")
         )
         print("Select template to update:")
         for index, filename in enumerate(template_filenames, start=1):
@@ -131,7 +146,7 @@ def list_templates_in_directory(directory):
 
 def get_updated_html_set_statement():
     return (
-        open(os.path.join(BASE_PATH, "scripts", "updated_template_set.sql"))
+        open(os.path.join(TEMPLIFY_REPO_PATH, "updated_template_set.sql"))
         .read()
         .strip()
     )
@@ -161,9 +176,11 @@ def update_template_content(template_filepath, updated_html_set_statement):
 
 
 def push_changes(template_filepath):
-    subprocess.run(["git", "add", template_filepath], cwd=REPO_PATH)
-    subprocess.run(["git", "commit", "-m", "Update template HTML"], cwd=REPO_PATH)
-    subprocess.run(["git", "push"], cwd=REPO_PATH)
+    subprocess.run(["git", "add", template_filepath], cwd=TEMPLATES_REPO_PATH)
+    subprocess.run(
+        ["git", "commit", "-m", "Update template HTML"], cwd=TEMPLATES_REPO_PATH
+    )
+    subprocess.run(["git", "push"], cwd=TEMPLATES_REPO_PATH)
 
 
 def create_pr(base_branch):
@@ -174,7 +191,9 @@ def create_pr(base_branch):
         == "y"
     )
     if create_pr:
-        subprocess.run(["gh", "pr", "create", "--base", base_branch], cwd=REPO_PATH)
+        subprocess.run(
+            ["gh", "pr", "create", "--base", base_branch], cwd=TEMPLATES_REPO_PATH
+        )
 
 
 if __name__ == "__main__":
