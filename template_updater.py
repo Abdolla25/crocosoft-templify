@@ -24,6 +24,13 @@ def main():
     )
 
     # Handle branch switch
+    response = input(
+        "Warning: Any unsaved changes in your local branch will be permanently lost due to a hard reset.\n"
+        "Continue (y/n): "
+    ).lower()
+    if response != "y":
+        print("Operation aborted. No changes have been made.")
+        return
     switch_branch_if_needed(base_branch, ticket_branch)
 
     # Get template filename
@@ -75,7 +82,9 @@ def parse_arguments():
 
 def switch_branch_if_needed(base_branch, ticket_branch):
     """Switch to a different git branch if needed."""
+    subprocess.run(["git", "reset", "--hard"], cwd=TEMPLATES_REPO_PATH)
     subprocess.run(["git", "fetch"], cwd=TEMPLATES_REPO_PATH)
+    subprocess.run(["git", "pull"], cwd=TEMPLATES_REPO_PATH)
 
     current_branch = get_current_git_branch()
     ticket_branch = ticket_branch or current_branch
@@ -97,7 +106,9 @@ def get_current_git_branch():
 
 def checkout_branch(base_branch, ticket_branch):
     try:
-        subprocess.run(["git", "checkout", ticket_branch], cwd=TEMPLATES_REPO_PATH)
+        subprocess.run(
+            ["git", "checkout", ticket_branch], cwd=TEMPLATES_REPO_PATH, check=True
+        )
         subprocess.run(
             ["git", "pull", "origin", ticket_branch], cwd=TEMPLATES_REPO_PATH
         )
@@ -186,14 +197,9 @@ def push_changes(template_filepath):
 def create_pr(base_branch):
     if not base_branch:
         return
-    create_pr = (
-        input(f"Do you want to create PR to branch {base_branch}? (y/n): ").lower()
-        == "y"
+    subprocess.run(
+        ["gh", "pr", "create", "--base", base_branch], cwd=TEMPLATES_REPO_PATH
     )
-    if create_pr:
-        subprocess.run(
-            ["gh", "pr", "create", "--base", base_branch], cwd=TEMPLATES_REPO_PATH
-        )
 
 
 if __name__ == "__main__":
