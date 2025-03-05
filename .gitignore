@@ -6,3 +6,12 @@ venv/
 
 # Ignore Git repository metadata (not necessary to ignore, but good practice)
 /.git
+
+# Ignore log files
+templify.log
+
+# Ignore temporary files
+*.tmp
+
+# Ignore egg-info directories
+*.egg-info/

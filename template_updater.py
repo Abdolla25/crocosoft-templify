@@ -2,63 +2,224 @@ import argparse
 import os
 import re
 import subprocess
+from dataclasses import dataclass
+from typing import Optional
 
-BASE_PATH = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TEMPLIFY_REPO_NAME = "templify"
-TEMPLIFY_REPO_PATH = os.path.join(BASE_PATH, TEMPLIFY_REPO_NAME)
-EMAIL_USERS_REPO_NAME = "EmailUsersPackageBuilder"
-TEMPLATES_REPO_PATH = os.path.join(BASE_PATH, EMAIL_USERS_REPO_NAME)
+import yaml
+
+from templify.logger import setup_logger
+
+logger = setup_logger()
+
+
+@dataclass
+class Config:
+    """Configuration class to hold settings."""
+
+    base_path: str
+    templify_repo_name: str
+    email_users_repo_name: str
+    templify_repo_path: str
+    templates_repo_path: str
+
+    @classmethod
+    def load(cls):
+        """Load configuration from YAML file."""
+        config_path = os.path.join(os.path.dirname(__file__), "config.yaml")
+        with open(config_path, "r") as f:
+            config = yaml.safe_load(f)
+
+        base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        config["paths"]["base_path"] = base_path
+
+        return cls(
+            base_path=base_path,
+            templify_repo_name=config["paths"]["templify_repo_name"],
+            email_users_repo_name=config["paths"]["email_users_repo_name"],
+            templify_repo_path=os.path.join(
+                base_path, config["paths"]["templify_repo_name"]
+            ),
+            templates_repo_path=os.path.join(
+                base_path, config["paths"]["email_users_repo_name"]
+            ),
+        )
+
+
+class GitOperations:
+    """Class to handle Git operations."""
+
+    def __init__(self, repo_path: str):
+        self.repo_path = repo_path
+
+    def run_command(
+        self, command: list, check: bool = True
+    ) -> subprocess.CompletedProcess:
+        """Run a git command safely."""
+        try:
+            return subprocess.run(
+                command, cwd=self.repo_path, check=check, capture_output=True, text=True
+            )
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Git command failed: {' '.join(command)}")
+            logger.error(f"Error output: {e.stderr}")
+            raise
+
+    def get_current_branch(self) -> str:
+        """Get the current git branch."""
+        result = self.run_command(["git", "rev-parse", "--abbrev-ref", "HEAD"])
+        return result.stdout.strip()
+
+    def switch_branch(self, base_branch: Optional[str], ticket_branch: str) -> None:
+        """Switch to or create a new branch."""
+        try:
+            # Try to checkout existing branch
+            self.run_command(["git", "checkout", ticket_branch])
+            self.run_command(["git", "pull", "origin", ticket_branch], check=False)
+        except subprocess.CalledProcessError:
+            logger.info(
+                f"Branch '{ticket_branch}' does not exist. Creating new branch..."
+            )
+            branch_out = base_branch or self.get_current_branch()
+            if (
+                input(f"Confirm branching out from {branch_out}? (y/n): ").lower()
+                == "y"
+            ):
+                self.run_command(["git", "checkout", branch_out])
+                self.run_command(["git", "pull", "origin", branch_out])
+                self.run_command(["git", "checkout", "-b", ticket_branch])
+                self.run_command(["git", "push", "-u", "origin", ticket_branch])
+            else:
+                logger.info(
+                    f"Branch change aborted. Proceeding with {self.get_current_branch()}"
+                )
+
+
+class TemplateManager:
+    """Class to manage template operations."""
+
+    def __init__(self, config: Config):
+        self.config = config
+        self.git = GitOperations(config.templates_repo_path)
+
+    def validate_html_content(self, html_content: str) -> None:
+        """Validate the HTML content format."""
+        pattern = r"^SET\s+@html_content\s*:=\s*['\"](.+?)['\"];$"
+        if not re.match(pattern, html_content):
+            raise ValueError(
+                "Invalid HTML content format. Must be a valid SQL SET statement."
+            )
+
+    def update_template(self, template_path: str, html_content: str) -> None:
+        """Update template content safely."""
+        temp_path = f"{template_path}.tmp"
+        try:
+            with open(template_path, "r") as file:
+                template_content = file.read()
+
+            new_content = "\n".join(
+                [
+                    html_content if line.startswith("SET @html_content") else line
+                    for line in template_content.split("\n")
+                ]
+            )
+
+            # Write to temporary file first
+            with open(temp_path, "w") as file:
+                file.write(new_content)
+
+            # If successful, replace original file
+            os.replace(temp_path, template_path)
+            logger.info(f"Successfully updated template: {template_path}")
+        except Exception as e:
+            logger.error(f"Failed to update template: {e}")
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            raise
 
 
 def main():
-    # Parse command line arguments
-    args = parse_arguments()
-    template_filename = args.template or input(
-        "Enter template filename (or press enter to skip): "
-    )
-    base_branch = args.base or input(
-        "Enter base branch to branching out and process PR (or press enter to skip): "
-    )
-    ticket_branch = args.ticket or input(
-        "Enter ticket branch -existing or new- (or press enter to skip): "
-    )
+    """Main function with enhanced error handling and logging."""
+    try:
+        config = Config.load()
+        template_manager = TemplateManager(config)
+        args = parse_arguments()
 
-    # Handle branch switch
-    response = input(
+        # Get template details
+        template_filename = args.template or get_template_selection(config)
+        template_path = os.path.join(
+            config.templates_repo_path, "templates", template_filename
+        )
+
+        # Handle branch operations
+        if confirm_branch_switch():
+            template_manager.git.switch_branch(args.base, args.ticket)
+
+        # Update template
+        html_content = get_updated_html_content(config)
+        template_manager.validate_html_content(html_content)
+        template_manager.update_template(template_path, html_content)
+
+        # Handle git operations
+        if confirm_action("Commit and push changes?"):
+            template_manager.git.run_command(["git", "add", template_path])
+            template_manager.git.run_command(
+                ["git", "commit", "-m", "Update template HTML"]
+            )
+            template_manager.git.run_command(["git", "push"])
+
+        if args.base and confirm_action("Create PR?"):
+            template_manager.git.run_command(
+                ["gh", "pr", "create", "--base", args.base]
+            )
+
+        logger.info("Template update completed successfully!")
+
+    except Exception as e:
+        logger.error(f"An error occurred: {str(e)}")
+        raise
+
+
+def confirm_action(prompt: str) -> bool:
+    """Utility function to confirm user actions."""
+    return input(f"{prompt} (y/n): ").lower() == "y"
+
+
+def confirm_branch_switch() -> bool:
+    """Confirm before switching branches."""
+    return confirm_action(
         "Warning: Any unsaved changes in your local branch will be permanently lost due to a hard reset.\n"
-        "Continue (y/n): "
-    ).lower()
-    if response != "y":
-        print("Operation aborted. No changes have been made.")
-        return
-    switch_branch_if_needed(base_branch, ticket_branch)
-
-    # Get template filename
-    template_filename = get_template_filename(template_filename)
-    template_filepath = os.path.join(
-        TEMPLATES_REPO_PATH, "templates", template_filename
+        "Continue?"
     )
 
-    # Get the updated HTML content
-    updated_html_set_statement = get_updated_html_set_statement()
 
-    # Update the template
-    validate_html_content_format(updated_html_set_statement)
-    update_template_content(template_filepath, updated_html_set_statement)
+def get_template_selection(config: Config) -> str:
+    """Get template selection from user."""
+    templates_dir = os.path.join(config.templates_repo_path, "templates")
+    template_files = sorted(os.listdir(templates_dir))
 
-    # Commit and push changes
-    print("Summary of changes:")
-    print(f"Template: {template_filename}")
-    print(f"Committing and pushing changes to ticket branch: {ticket_branch}")
-    input("Continue (y/n): ").lower() == "y" and push_changes(template_filepath)
+    print("\nAvailable templates:")
+    for idx, filename in enumerate(template_files, 1):
+        print(f"{idx}. {filename}")
 
-    # Create PR
-    print(f"Creating PR to base branch: {base_branch}")
-    input("Continue (y/n): ").lower() == "y" and create_pr(base_branch)
+    while True:
+        try:
+            choice = int(input("\nEnter template number: "))
+            if 1 <= choice <= len(template_files):
+                return template_files[choice - 1]
+            print("Invalid selection. Please try again.")
+        except ValueError:
+            print("Please enter a valid number.")
 
-    # Clean up
-    print("Cleaning up...")
-    subprocess.run(["rm", "-f", "updated_template_set.sql"], cwd=TEMPLIFY_REPO_PATH)
+
+def get_updated_html_content(config: Config) -> str:
+    """Get updated HTML content from file."""
+    content_path = os.path.join(config.templify_repo_path, "updated_template_set.sql")
+    try:
+        with open(content_path, "r") as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        logger.error(f"HTML content file not found: {content_path}")
+        raise
 
 
 def parse_arguments():
@@ -80,130 +241,11 @@ def parse_arguments():
     return parser.parse_args()
 
 
-def switch_branch_if_needed(base_branch, ticket_branch):
-    """Switch to a different git branch if needed."""
-    subprocess.run(["git", "reset", "--hard"], cwd=TEMPLATES_REPO_PATH)
-    subprocess.run(["git", "fetch"], cwd=TEMPLATES_REPO_PATH)
-    subprocess.run(["git", "pull"], cwd=TEMPLATES_REPO_PATH)
-
-    current_branch = get_current_git_branch()
-    ticket_branch = ticket_branch or current_branch
-    if current_branch != ticket_branch:
-        print(f"Current branch: {current_branch}. Switching to {ticket_branch}")
-        checkout_branch(base_branch, ticket_branch)
-
-
-def get_current_git_branch():
-    """Get the current git branch."""
-    return (
-        subprocess.check_output(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=TEMPLATES_REPO_PATH
-        )
-        .decode("utf-8")
-        .strip()
-    )
-
-
-def checkout_branch(base_branch, ticket_branch):
-    try:
-        subprocess.run(
-            ["git", "checkout", ticket_branch], cwd=TEMPLATES_REPO_PATH, check=True
-        )
-        subprocess.run(
-            ["git", "pull", "origin", ticket_branch], cwd=TEMPLATES_REPO_PATH
-        )
-    except subprocess.CalledProcessError:
-        print(f"The branch '{ticket_branch}' does not exist.")
-        branch_out = base_branch or get_current_git_branch()
-        create_new_branch = (
-            input(f"Confirm branching out from {branch_out}? (y/n): ").lower() == "y"
-        )
-        if create_new_branch:
-            subprocess.run(["git", "checkout", branch_out], cwd=TEMPLATES_REPO_PATH)
-            subprocess.run(
-                ["git", "pull", "origin", branch_out], cwd=TEMPLATES_REPO_PATH
-            )
-            subprocess.run(
-                ["git", "checkout", "-b", ticket_branch], cwd=TEMPLATES_REPO_PATH
-            )
-            subprocess.run(
-                ["git", "push", "-u", "origin", ticket_branch], cwd=TEMPLATES_REPO_PATH
-            )
-        else:
-            print(f"Branch change aborted. proceeding with {get_current_git_branch()}")
-
-
-def get_template_filename(template_filename):
-    if not template_filename:
-        template_filenames = list_templates_in_directory(
-            os.path.join(TEMPLATES_REPO_PATH, "templates")
-        )
-        print("Select template to update:")
-        for index, filename in enumerate(template_filenames, start=1):
-            print(f"{index}. {filename}")
-
-        choice = int(input("Enter number: "))
-        if choice < 1 or choice > len(template_filenames):
-            raise ValueError(f"Invalid choice: {choice}. Exiting.")
-
-        template_filename = template_filenames[choice - 1]
-    return template_filename
-
-
-def list_templates_in_directory(directory):
-    """List all files in the given directory."""
-    return sorted(os.listdir(directory))
-
-
-def get_updated_html_set_statement():
-    return (
-        open(os.path.join(TEMPLIFY_REPO_PATH, "updated_template_set.sql"))
-        .read()
-        .strip()
-    )
-
-
-def validate_html_content_format(html_content):
-    """Validate the html content format."""
-    pattern = r"^SET\s+@html_content\s*:=\s*['\"](.+?)['\"];$"
-    if not re.match(pattern, html_content):
-        raise ValueError(
-            f"Invalid HTML content format. Must be a valid SQL SET statement. {pattern}"
-        )
-
-
-def update_template_content(template_filepath, updated_html_set_statement):
-    """Update the given template content with the new html set statement."""
-    with open(template_filepath) as file:
-        template_content = file.read()
-    new_template_content = "\n".join(
-        [
-            updated_html_set_statement if line.startswith("SET @html_content") else line
-            for line in template_content.split("\n")
-        ]
-    )
-    with open(template_filepath, "w") as file:
-        file.write(new_template_content)
-
-
-def push_changes(template_filepath):
-    subprocess.run(["git", "add", template_filepath], cwd=TEMPLATES_REPO_PATH)
-    subprocess.run(
-        ["git", "commit", "-m", "Update template HTML"], cwd=TEMPLATES_REPO_PATH
-    )
-    subprocess.run(["git", "push"], cwd=TEMPLATES_REPO_PATH)
-
-
-def create_pr(base_branch):
-    if not base_branch:
-        return
-    subprocess.run(
-        ["gh", "pr", "create", "--base", base_branch], cwd=TEMPLATES_REPO_PATH
-    )
-
-
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("Exiting.")
+        logger.info("Operation cancelled by user.")
+    except Exception as e:
+        logger.error(f"Fatal error: {e}")
+        raise

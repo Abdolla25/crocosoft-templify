@@ -1,45 +1,75 @@
 # Templify: A Template Updater Tool
 
+[![Tests](https://github.com/Abdolla25/crocosoft-templify/workflows/Tests/badge.svg)](https://github.com/Abdolla25/crocosoft-templify/actions)
+[![Coverage](https://codecov.io/gh/Abdolla25/crocosoft-templify/branch/main/graph/badge.svg)](https://codecov.io/gh/Abdolla25/crocosoft-templify)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 ## Overview
-Templify is a command-line tool designed to simplify the process of updating templates with new HTML content. It provides a set of aliases and a Python script to streamline the workflow.
+Templify is a command-line tool designed to simplify the process of updating templates with new HTML content. It provides a robust interface for template management with Git integration.
 
 ## Installation
-To install Templify, simply run the `setup.sh` script in the project directory:
+
+You can install Templify using the `setup.sh` script:
 
 ```bash
 source ./setup.sh
 ```
 
-This will add the necessary aliases to your `~/.bashrc` file.
+## Quick Start
 
-## Usage
-
-### Aliases
-The following aliases are available:
-
-- `templify-help`: Displays the help message for the template_updater.py script.
-- `templify-clean`: Removes the updated_template_set.sql file.
-- `templify-edit`: Opens the updated_template_set.sql file in the default editor (nano) and removes any existing file.
-- `templify`: Updates the template with the new HTML content and commits the changes.
-
-### Example Usage
-To update a template, simply run:
-
+1. Initialize Templify in your project:
 ```bash
-templify
+templify init
 ```
 
-This will prompt you to select a template to update, and then update the template with the new HTML content.
-
-## Manual Setup on Bashrc File
-To manually add the Templify aliases to your `~/.bashrc` file, add the following lines:
-
+2. Update a template:
 ```bash
-# Templify
-alias templify-help='python /path/to/templify/template_updater.py -h'
-alias templify-clean='rm -f /path/to/templify/updated_template_set.sql'
-alias templify-edit='templify-clean && nano /path/to/templify/updated_template_set.sql'
-alias templify='templify-edit && python /path/to/templify/template_updater.py'
+templify update --template my_template.sql --base main --ticket feature/update-template
 ```
 
-Replace `/path/to/templify` with the actual path to the Templify project directory.
+## Features
+
+- Template content validation
+- Git integration for version control
+- Branch management
+- Pull request creation
+- Logging and error tracking
+
+## Development
+
+### Setting up the development environment
+
+1. Clone the repository:
+```bash
+git clone https://github.com/yourusername/templify.git
+cd templify
+```
+
+2. Create a virtual environment:
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
+
+3. Install development dependencies:
+```bash
+pip install -e ".[dev]"
+```
+
+### Running Tests
+
+```bash
+pytest tests/
+```
+
+### Contributing
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

@@ -1,0 +1,16 @@
+# Repository paths and settings
+paths:
+  base_path: null  # Will be set programmatically
+  templify_repo_name: "templify"
+  email_users_repo_name: "EmailUsersPackageBuilder"
+
+# Git settings
+git:
+  default_editor: "nano"
+  default_commit_message: "Update template HTML"
+
+# Logging
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(levelname)s - %(message)s"
+  file: "templify.log" 
